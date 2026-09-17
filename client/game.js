@@ -1,4 +1,4 @@
-const roomId = "ABC123";
+const roomId = "chakkaronit";
 const socket = new WebSocket(`ws://localhost:8000/ws/${roomId}`);
 
 const status = document.getElementById("status");
@@ -21,6 +21,7 @@ button.addEventListener("click", () => {
     }
 
     socket.send(message);
+    console.log(roomId)
 
     input.value = "";
 });
