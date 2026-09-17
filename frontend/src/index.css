@@ -1,0 +1,12 @@
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.35);
+  color: white;
+}
