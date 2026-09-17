@@ -1,0 +1,75 @@
+### FastAPI & Python Specifics ###
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+### Virtual Environments ###
+.venv/
+venv/
+ENV/
+env/
+active_env/
+
+### Environment Variables & Secrets (CRITICAL) ###
+.env
+.env.*
+!.env.example
+secrets.toml
+
+### Database Files (SQLite / Local DB dumps) ###
+*.db
+*.sqlite3
+*.sqlite
+
+### Testing & Coverage ###
+.htmlcov/
+.tox/
+.nosexy/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+### Logging ###
+*.log
+logs/
+
+### IDEs and Editors ###
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db

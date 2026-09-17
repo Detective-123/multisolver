@@ -1,4 +1,5 @@
-const socket = new WebSocket("ws://localhost:8000/ws");
+const roomId = "ABC123";
+const socket = new WebSocket(`ws://localhost:8000/ws/${roomId}`);
 
 const status = document.getElementById("status");
 const input = document.getElementById("messageInput");
