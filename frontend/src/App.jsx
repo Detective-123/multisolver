@@ -1,218 +1,1679 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const PRIVATE_CLUE =
-  "The pattern is based on multiplying each position by the next number.";
+/* =========================
+   GAME DATA
+========================= */
 
-const TEAMMATES = [
+const ROLE_POOL = [
   {
-    name: "You",
     role: "Puzzle Solver",
     color: "purple",
-    initials: "YO",
+    initials: "P1",
   },
   {
-    name: "Player 2",
     role: "Logic",
     color: "blue",
     initials: "P2",
   },
   {
-    name: "Player 3",
     role: "Clue Hunter",
     color: "green",
     initials: "P3",
   },
   {
-    name: "Player 4",
     role: "Pattern Master",
     color: "orange",
     initials: "P4",
   },
 ];
 
+const CLUES = {
+  "Puzzle Solver":
+    "Look at how each term is formed using its position.",
+
+  Logic:
+    "The differences are +4, +6, +8, so the next difference continues the pattern.",
+
+  "Clue Hunter":
+    "The first terms can be written as 1×2, 2×3, 3×4 and 4×5.",
+
+  "Pattern Master":
+    "Every term follows the rule n × (n + 1).",
+};
+
+const GAME_DURATION = 10 * 60;
+
+/* =========================
+   HELPERS
+========================= */
+
 function generateRoomCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  return Math.random()
+    .toString(36)
+    .substring(2, 8)
+    .toUpperCase();
 }
 
+/*
+  IMPORTANT:
+  sessionStorage is used so
+  every browser tab gets a
+  different player ID.
+*/
+function createPlayerId() {
+  const saved =
+    sessionStorage.getItem(
+      "multisolver_player_id"
+    );
+
+  if (saved) {
+    return saved;
+  }
+
+  const id =
+    crypto.randomUUID?.() ||
+    `${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2)}`;
+
+  sessionStorage.setItem(
+    "multisolver_player_id",
+    id
+  );
+
+  return id;
+}
+
+function getRoleDetails(role) {
+  return (
+    ROLE_POOL.find(
+      (item) => item.role === role
+    ) || ROLE_POOL[0]
+  );
+}
+
+/* =========================
+   APP
+========================= */
+
 function App() {
-  const [screen, setScreen] = useState("home");
+  /* =========================
+     NAVIGATION
+  ========================= */
 
-  const [roomCode, setRoomCode] = useState("");
-  const [createdCode, setCreatedCode] = useState("");
+  const [screen, setScreen] =
+    useState("home");
 
-  const [clueShared, setClueShared] = useState(false);
+  /* =========================
+     PLAYER
+  ========================= */
 
-  const [chatMessage, setChatMessage] = useState("");
+  const [playerId] = useState(
+    () => createPlayerId()
+  );
 
-  const [messages, setMessages] = useState([
-    {
-      sender: "Player 2",
-      text: "Difference is +4, +6, +8...",
-      own: false,
-    },
-    {
-      sender: "Player 3",
-      text: "So the next difference should be +10.",
-      own: false,
-    },
-  ]);
+  const [playerName, setPlayerName] =
+    useState(
+      () =>
+        localStorage.getItem(
+          "multisolver_name"
+        ) || ""
+    );
 
-  const [answer, setAnswer] = useState("");
-  const [answerStatus, setAnswerStatus] = useState("");
-  const [gameStarted, setGameStarted] = useState(false);
+  const [playerRole, setPlayerRole] =
+    useState("Puzzle Solver");
 
-  const [timeLeft, setTimeLeft] = useState(10 * 60);
+  const [isHost, setIsHost] =
+    useState(false);
 
-  /* ---------------- TIMER ---------------- */
+  /* =========================
+     ROOM
+  ========================= */
+
+  const [roomCode, setRoomCode] =
+    useState("");
+
+  const [roomName, setRoomName] =
+    useState("");
+
+  const [
+    createRoomName,
+    setCreateRoomName,
+  ] = useState("");
+
+  const [
+    joinRoomCode,
+    setJoinRoomCode,
+  ] = useState("");
+
+  const [
+    joinRoomName,
+    setJoinRoomName,
+  ] = useState("");
+
+  /* =========================
+     SOCKET
+  ========================= */
+
+  const socketRef = useRef(null);
+
+  const playerRef = useRef(null);
+
+  const playersRef = useRef({});
+
+  const roomNameRef = useRef("");
+
+  const [
+    connectionStatus,
+    setConnectionStatus,
+  ] = useState("disconnected");
+
+  /* =========================
+     PLAYERS
+  ========================= */
+
+  const [players, setPlayers] =
+    useState({});
+
+  /* =========================
+     GAME
+  ========================= */
+
+  const [
+    gameStartedAt,
+    setGameStartedAt,
+  ] = useState(null);
+
+  const [timeLeft, setTimeLeft] =
+    useState(GAME_DURATION);
+
+  const [answer, setAnswer] =
+    useState("");
+
+  const [
+    answerStatus,
+    setAnswerStatus,
+  ] = useState("");
+
+  /* =========================
+     CLUES
+  ========================= */
+
+  const [
+    clueShared,
+    setClueShared,
+  ] = useState(false);
+
+  const [
+    sharedClues,
+    setSharedClues,
+  ] = useState({});
+
+  /* =========================
+     CHAT
+  ========================= */
+
+  const [messages, setMessages] =
+    useState([]);
+
+  const [
+    chatMessage,
+    setChatMessage,
+  ] = useState("");
+
+  /* =========================
+     PLAYER REF
+  ========================= */
 
   useEffect(() => {
-    if (screen !== "game" || !gameStarted) {
+    const details =
+      getRoleDetails(playerRole);
+
+    playerRef.current = {
+      id: playerId,
+      name:
+        playerName.trim() ||
+        "Player",
+      role: playerRole,
+      color: details.color,
+      initials: details.initials,
+      host: isHost,
+    };
+  }, [
+    playerId,
+    playerName,
+    playerRole,
+    isHost,
+  ]);
+
+  /* =========================
+     SAVE NAME
+  ========================= */
+
+  useEffect(() => {
+    localStorage.setItem(
+      "multisolver_name",
+      playerName
+    );
+  }, [playerName]);
+
+  /* =========================
+     ROOM REF
+  ========================= */
+
+  useEffect(() => {
+    roomNameRef.current =
+      roomName;
+  }, [roomName]);
+
+  /* =========================
+     UPDATE PLAYERS
+  ========================= */
+
+  const updatePlayers = (
+    updater
+  ) => {
+    setPlayers((previous) => {
+      const next =
+        typeof updater ===
+        "function"
+          ? updater(previous)
+          : updater;
+
+      playersRef.current =
+        next;
+
+      return next;
+    });
+  };
+
+  /* =========================
+     SEND SOCKET MESSAGE
+  ========================= */
+
+  const sendSocketMessage = (
+    payload
+  ) => {
+    const socket =
+      socketRef.current;
+
+    if (
+      !socket ||
+      socket.readyState !==
+        WebSocket.OPEN
+    ) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify(payload)
+    );
+
+    return true;
+  };
+
+  /* =========================
+     WEBSOCKET
+
+     ONE SOCKET PER ROOM
+  ========================= */
+
+  useEffect(() => {
+    if (!roomCode) {
       return;
     }
 
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 0) {
-          clearInterval(timer);
-          return 0;
+    console.log(
+      "Connecting:",
+      playerId,
+      "Room:",
+      roomCode
+    );
+
+    const socket =
+      new WebSocket(
+        `ws://127.0.0.1:8000/ws/${roomCode}`
+      );
+
+    socketRef.current =
+      socket;
+
+    setConnectionStatus(
+      "connecting"
+    );
+
+    /* =====================
+       OPEN
+    ===================== */
+
+    socket.onopen = () => {
+      if (
+        socketRef.current !==
+        socket
+      ) {
+        return;
+      }
+
+      console.log(
+        "Connected:",
+        playerId
+      );
+
+      setConnectionStatus(
+        "connected"
+      );
+
+      const currentPlayer =
+        playerRef.current;
+
+      /*
+        Show ourselves locally.
+      */
+      updatePlayers(
+        (previous) => ({
+          ...previous,
+          [currentPlayer.id]:
+            currentPlayer,
+        })
+      );
+
+      /*
+        Tell backend we joined.
+
+        Host sends room name.
+      */
+      socket.send(
+        JSON.stringify({
+          type: "join",
+          player:
+            currentPlayer,
+          roomName:
+            isHost
+              ? roomNameRef.current
+              : null,
+        })
+      );
+    };
+
+    /* =====================
+       MESSAGE
+    ===================== */
+
+    socket.onmessage = (
+      event
+    ) => {
+      try {
+        const data =
+          JSON.parse(
+            event.data
+          );
+
+        /* ====================
+           PLAYER JOIN
+        ==================== */
+
+        if (
+          data.type === "join"
+        ) {
+          if (!data.player) {
+            return;
+          }
+
+          const joinedPlayer =
+            data.player;
+
+          /*
+            Add the joining
+            player immediately.
+          */
+          updatePlayers(
+            (previous) => ({
+              ...previous,
+              [joinedPlayer.id]:
+                joinedPlayer,
+            })
+          );
+
+          /*
+            IMPORTANT FIX:
+            Host assigns a unique
+            role to every new player.
+
+            Host = P1
+            Player 2 = Logic
+            Player 3 = Clue Hunter
+            Player 4 = Pattern Master
+          */
+          if (
+            isHost &&
+            joinedPlayer.id !==
+              playerId
+          ) {
+            const currentPlayers =
+              playersRef.current;
+
+            const playerCount =
+              Object.keys(
+                currentPlayers
+              ).length;
+
+            /*
+              Host is position 0.
+
+              First guest:
+              playerCount = 2
+              roleIndex = 1
+
+              Second guest:
+              playerCount = 3
+              roleIndex = 2
+
+              Third guest:
+              playerCount = 4
+              roleIndex = 3
+            */
+            const roleIndex =
+              Math.min(
+                playerCount - 1,
+                ROLE_POOL.length - 1
+              );
+
+            const assignedRole =
+              ROLE_POOL[
+                roleIndex
+              ];
+
+            const assignedPlayer = {
+              ...joinedPlayer,
+              role:
+                assignedRole.role,
+              color:
+                assignedRole.color,
+              initials:
+                assignedRole.initials,
+              host: false,
+            };
+
+            /*
+              Tell backend to update
+              this player's role.
+            */
+            socket.send(
+              JSON.stringify({
+                type:
+                  "role_assign",
+                targetId:
+                  joinedPlayer.id,
+                role:
+                  assignedRole.role,
+                color:
+                  assignedRole.color,
+                initials:
+                  assignedRole.initials,
+              })
+            );
+
+            /*
+              Update host's own copy
+              immediately.
+            */
+            updatePlayers(
+              (previous) => ({
+                ...previous,
+                [joinedPlayer.id]:
+                  assignedPlayer,
+              })
+            );
+          }
+
+          return;
         }
 
-        return prev - 1;
-      });
-    }, 1000);
+        /* ====================
+           ROLE ASSIGNMENT
+        ==================== */
 
-    return () => clearInterval(timer);
-  }, [screen, gameStarted]);
+        if (
+          data.type ===
+            "role_assign" &&
+          data.targetId ===
+            playerId
+        ) {
+          const newRole =
+            data.role;
 
-  const formatTime = (seconds) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+          const details =
+            getRoleDetails(
+              newRole
+            );
 
-    return `${String(minutes).padStart(2, "0")}:${String(
-      remainingSeconds
-    ).padStart(2, "0")}`;
+          setPlayerRole(
+            newRole
+          );
+
+          const updatedPlayer = {
+            ...playerRef.current,
+            role:
+              newRole,
+            color:
+              data.color ||
+              details.color,
+            initials:
+              data.initials ||
+              details.initials,
+          };
+
+          playerRef.current =
+            updatedPlayer;
+
+          updatePlayers(
+            (previous) => ({
+              ...previous,
+              [playerId]:
+                updatedPlayer,
+            })
+          );
+
+          return;
+        }
+
+        /* ====================
+           ROOM INFO
+        ==================== */
+
+        if (
+          data.type ===
+          "room_info"
+        ) {
+          if (
+            !data.targetId ||
+            data.targetId ===
+              playerId
+          ) {
+            if (
+              data.roomName
+            ) {
+              roomNameRef.current =
+                data.roomName;
+
+              setRoomName(
+                data.roomName
+              );
+            }
+          }
+
+          return;
+        }
+
+        /* ====================
+           PLAYER SNAPSHOT
+        ==================== */
+
+        if (
+          data.type ===
+            "players_snapshot" &&
+          data.targetId ===
+            playerId
+        ) {
+          if (data.players) {
+            updatePlayers(
+              data.players
+            );
+
+            const me =
+              data.players[
+                playerId
+              ];
+
+            if (me) {
+              setPlayerRole(
+                me.role ||
+                  "Puzzle Solver"
+              );
+
+              setIsHost(
+                Boolean(
+                  me.host
+                )
+              );
+            }
+          }
+
+          return;
+        }
+
+        /* ====================
+           SNAPSHOT UPDATE
+        ==================== */
+
+        if (
+          data.type ===
+          "players_snapshot_update"
+        ) {
+          if (data.players) {
+            updatePlayers(
+              data.players
+            );
+
+            const me =
+              data.players[
+                playerId
+              ];
+
+            if (me) {
+              setPlayerRole(
+                me.role ||
+                  "Puzzle Solver"
+              );
+
+              setIsHost(
+                Boolean(
+                  me.host
+                )
+              );
+            }
+          }
+
+          return;
+        }
+
+        /* ====================
+           PLAYER LEFT
+        ==================== */
+
+        if (
+          data.type ===
+          "player_left"
+        ) {
+          updatePlayers(
+            (previous) => {
+              const next = {
+                ...previous,
+              };
+
+              delete next[
+                data.playerId
+              ];
+
+              return next;
+            }
+          );
+
+          setMessages(
+            (previous) => [
+              ...previous,
+              {
+                id:
+                  `${Date.now()}-${Math.random()}`,
+                sender:
+                  "System",
+                text:
+                  "A player left the room.",
+                own: false,
+                system: true,
+              },
+            ]
+          );
+
+          return;
+        }
+
+        /* ====================
+           HOST CHANGED
+        ==================== */
+
+        if (
+          data.type ===
+          "host_changed"
+        ) {
+          const newHostId =
+            data.hostId;
+
+          setIsHost(
+            newHostId ===
+              playerId
+          );
+
+          updatePlayers(
+            (previous) => {
+              const next = {
+                ...previous,
+              };
+
+              Object.keys(
+                next
+              ).forEach(
+                (id) => {
+                  next[id] = {
+                    ...next[id],
+                    host:
+                      id ===
+                      newHostId,
+                  };
+                }
+              );
+
+              return next;
+            }
+          );
+
+          return;
+        }
+
+        /* ====================
+           ROOM FULL
+        ==================== */
+
+        if (
+          data.type ===
+          "room_full"
+        ) {
+          alert(
+            "This room is full. Maximum 4 players."
+          );
+
+          if (
+            socketRef.current
+          ) {
+            socketRef.current.close();
+
+            socketRef.current =
+              null;
+          }
+
+          setRoomCode("");
+
+          setRoomName("");
+
+          setPlayers({});
+
+          playersRef.current =
+            {};
+
+          setIsHost(false);
+
+          setConnectionStatus(
+            "disconnected"
+          );
+
+          setScreen("home");
+
+          return;
+        }
+
+        /* ====================
+           GAME START
+        ==================== */
+
+        if (
+          data.type ===
+          "game_start"
+        ) {
+          const startTime =
+            Number(
+              data.startedAt
+            );
+
+          if (
+            Number.isFinite(
+              startTime
+            )
+          ) {
+            setGameStartedAt(
+              startTime
+            );
+
+            setTimeLeft(
+              Math.max(
+                0,
+                Math.ceil(
+                  (
+                    startTime +
+                    GAME_DURATION *
+                      1000 -
+                    Date.now()
+                  ) /
+                    1000
+                )
+              )
+            );
+
+            setAnswer("");
+
+            setAnswerStatus("");
+
+            setScreen(
+              "game"
+            );
+          }
+
+          return;
+        }
+
+        /* ====================
+           CHAT
+        ==================== */
+
+        if (
+          data.type === "chat"
+        ) {
+          setMessages(
+            (previous) => [
+              ...previous,
+              {
+                id:
+                  `${Date.now()}-${Math.random()}`,
+                sender:
+                  data.name ||
+                  "Player",
+                text:
+                  data.text ||
+                  "",
+                own:
+                  data.playerId ===
+                  playerId,
+                system: false,
+              },
+            ]
+          );
+
+          return;
+        }
+
+        /* ====================
+           CLUE SHARED
+        ==================== */
+
+        if (
+          data.type ===
+          "clue_shared"
+        ) {
+          if (
+            !data.playerId
+          ) {
+            return;
+          }
+
+          /*
+            One clue per player.
+          */
+          setSharedClues(
+            (previous) => ({
+              ...previous,
+              [data.playerId]: {
+                name:
+                  data.name ||
+                  "Player",
+                role:
+                  data.role ||
+                  "Teammate",
+                clue:
+                  data.clue ||
+                  "",
+              },
+            })
+          );
+
+          /*
+            Mark immediately for
+            the current player.
+          */
+          if (
+            data.playerId ===
+            playerId
+          ) {
+            setClueShared(
+              true
+            );
+          }
+
+          /*
+            One notification.
+          */
+          setMessages(
+            (previous) => [
+              ...previous,
+              {
+                id:
+                  `${Date.now()}-${Math.random()}`,
+                sender:
+                  data.name ||
+                  "Player",
+                text:
+                  "Shared a clue with the team.",
+                own:
+                  data.playerId ===
+                  playerId,
+                system: true,
+              },
+            ]
+          );
+
+          return;
+        }
+
+        /* ====================
+           ANSWER RESULT
+        ==================== */
+
+        if (
+          data.type ===
+          "answer_result"
+        ) {
+          setAnswerStatus(
+            data.correct
+              ? "correct"
+              : "wrong"
+          );
+
+          if (
+            data.correct
+          ) {
+            setMessages(
+              (previous) => [
+                ...previous,
+                {
+                  id:
+                    `${Date.now()}-${Math.random()}`,
+                  sender:
+                    "System",
+                  text:
+                    "🎉 Your team solved the puzzle!",
+                  own: false,
+                  system: true,
+                },
+              ]
+            );
+          }
+
+          return;
+        }
+
+        /* ====================
+           SYSTEM
+        ==================== */
+
+        if (
+          data.type ===
+          "system"
+        ) {
+          setMessages(
+            (previous) => [
+              ...previous,
+              {
+                id:
+                  `${Date.now()}-${Math.random()}`,
+                sender:
+                  "System",
+                text:
+                  data.text ||
+                  "",
+                own: false,
+                system: true,
+              },
+            ]
+          );
+
+          return;
+        }
+
+        /* ====================
+           SERVER ERROR
+        ==================== */
+
+        if (
+          data.type ===
+          "error"
+        ) {
+          console.error(
+            "Server error:",
+            data.message
+          );
+
+          return;
+        }
+      } catch {
+        setMessages(
+          (previous) => [
+            ...previous,
+            {
+              id:
+                `${Date.now()}-${Math.random()}`,
+              sender:
+                "Player",
+              text:
+                event.data,
+              own: false,
+              system: false,
+            },
+          ]
+        );
+      }
+    };
+
+    /* =====================
+       SOCKET ERROR
+    ===================== */
+
+    socket.onerror = (
+      error
+    ) => {
+      console.error(
+        "WebSocket error:",
+        error
+      );
+
+      if (
+        socketRef.current ===
+        socket
+      ) {
+        setConnectionStatus(
+          "error"
+        );
+      }
+    };
+
+    /* =====================
+       SOCKET CLOSED
+    ===================== */
+
+    socket.onclose = () => {
+      if (
+        socketRef.current ===
+        socket
+      ) {
+        socketRef.current =
+          null;
+
+        setConnectionStatus(
+          "disconnected"
+        );
+      }
+    };
+
+    /* =====================
+       CLEANUP
+    ===================== */
+
+    return () => {
+      if (
+        socketRef.current ===
+        socket
+      ) {
+        socketRef.current =
+          null;
+      }
+
+      socket.close();
+    };
+  }, [roomCode]);
+
+  /* =========================
+     TIMER
+  ========================= */
+
+  useEffect(() => {
+    if (
+      screen !== "game" ||
+      !gameStartedAt
+    ) {
+      return;
+    }
+
+    const updateTimer =
+      () => {
+        const endTime =
+          Number(
+            gameStartedAt
+          ) +
+          GAME_DURATION *
+            1000;
+
+        const remaining =
+          Math.max(
+            0,
+            Math.ceil(
+              (
+                endTime -
+                Date.now()
+              ) /
+                1000
+            )
+          );
+
+        setTimeLeft(
+          remaining
+        );
+      };
+
+    updateTimer();
+
+    const timer =
+      setInterval(
+        updateTimer,
+        1000
+      );
+
+    return () =>
+      clearInterval(
+        timer
+      );
+  }, [
+    screen,
+    gameStartedAt,
+  ]);
+
+  /* =========================
+     CREATE ROOM
+  ========================= */
+
+  const openCreateRoom = () => {
+    setCreateRoomName("");
+
+    setPlayerName(
+      localStorage.getItem(
+        "multisolver_name"
+      ) || ""
+    );
+
+    setScreen("create");
   };
 
-  /* ---------------- ROOM ---------------- */
-
   const createRoom = () => {
-    const code = generateRoomCode();
+    const name =
+      playerName.trim();
 
-    setCreatedCode(code);
+    const teamName =
+      createRoomName.trim();
+
+    if (!name) {
+      alert(
+        "Enter your name first."
+      );
+
+      return;
+    }
+
+    if (!teamName) {
+      alert(
+        "Enter a room name."
+      );
+
+      return;
+    }
+
+    if (socketRef.current) {
+      socketRef.current.close();
+
+      socketRef.current =
+        null;
+    }
+
+    const code =
+      generateRoomCode();
+
+    const hostPlayer = {
+      id: playerId,
+      name,
+      role: "Puzzle Solver",
+      color: "purple",
+      initials: "P1",
+      host: true,
+    };
+
+    setIsHost(true);
+
+    setPlayerRole(
+      "Puzzle Solver"
+    );
+
+    playerRef.current =
+      hostPlayer;
+
+    playersRef.current = {
+      [playerId]:
+        hostPlayer,
+    };
+
+    setPlayers({
+      [playerId]:
+        hostPlayer,
+    });
+
+    roomNameRef.current =
+      teamName;
+
+    setRoomName(
+      teamName
+    );
+
+    setRoomCode(
+      code
+    );
+
+    setSharedClues({});
+
+    setMessages([]);
+
+    setClueShared(
+      false
+    );
+
+    setGameStartedAt(
+      null
+    );
+
+    setAnswer("");
+
+    setAnswerStatus("");
+
+    setConnectionStatus(
+      "connecting"
+    );
+
     setScreen("lobby");
+  };
+
+  /* =========================
+     JOIN ROOM
+  ========================= */
+
+  const openJoinRoom = () => {
+    setJoinRoomCode("");
+
+    setJoinRoomName("");
+
+    setScreen("join");
   };
 
   const joinRoom = () => {
-    const code = roomCode.trim().toUpperCase();
+    const name =
+      joinRoomName.trim();
 
-    if (code.length !== 6) {
-      alert("Enter a valid 6-character room code.");
+    const code =
+      joinRoomCode
+        .trim()
+        .toUpperCase();
+
+    if (!name) {
+      alert(
+        "Enter your name first."
+      );
+
       return;
     }
 
-    setCreatedCode(code);
+    if (
+      code.length !== 6
+    ) {
+      alert(
+        "Enter a valid 6-character room code."
+      );
+
+      return;
+    }
+
+    if (socketRef.current) {
+      socketRef.current.close();
+
+      socketRef.current =
+        null;
+    }
+
+    const joiningPlayer = {
+      id: playerId,
+      name,
+      role: "Puzzle Solver",
+      color: "purple",
+      initials: "P1",
+      host: false,
+    };
+
+    setPlayerName(
+      name
+    );
+
+    setIsHost(false);
+
+    /*
+      Temporary role.
+      Host will replace this
+      with Logic / Clue Hunter /
+      Pattern Master.
+    */
+    setPlayerRole(
+      "Puzzle Solver"
+    );
+
+    playerRef.current =
+      joiningPlayer;
+
+    playersRef.current = {
+      [playerId]:
+        joiningPlayer,
+    };
+
+    setPlayers({
+      [playerId]:
+        joiningPlayer,
+    });
+
+    setRoomName(
+      "Connecting..."
+    );
+
+    roomNameRef.current =
+      "Connecting...";
+
+    setRoomCode(
+      code
+    );
+
+    setSharedClues({});
+
+    setMessages([]);
+
+    setClueShared(
+      false
+    );
+
+    setGameStartedAt(
+      null
+    );
+
+    setAnswer("");
+
+    setAnswerStatus("");
+
+    setConnectionStatus(
+      "connecting"
+    );
+
     setScreen("lobby");
   };
 
-  /* ---------------- GAME ---------------- */
+  /* =========================
+     START GAME
+  ========================= */
 
   const startGame = () => {
-    setGameStarted(true);
-    setClueShared(false);
-    setAnswer("");
-    setAnswerStatus("");
-    setTimeLeft(10 * 60);
+    if (!isHost) {
+      return;
+    }
 
-    setMessages([
-      {
-        sender: "Player 2",
-        text: "Difference is +4, +6, +8...",
-        own: false,
-      },
-      {
-        sender: "Player 3",
-        text: "So the next difference should be +10.",
-        own: false,
-      },
-    ]);
+    if (
+      !socketRef.current ||
+      socketRef.current.readyState !==
+        WebSocket.OPEN
+    ) {
+      alert(
+        "Room is not connected yet."
+      );
+
+      return;
+    }
+
+    const startTime =
+      Date.now();
+
+    setGameStartedAt(
+      startTime
+    );
+
+    setTimeLeft(
+      GAME_DURATION
+    );
+
+    setAnswer("");
+
+    setAnswerStatus("");
+
+    setMessages([]);
+
+    setSharedClues({});
+
+    setClueShared(
+      false
+    );
+
+    sendSocketMessage({
+      type:
+        "game_start",
+      startedAt:
+        startTime,
+    });
 
     setScreen("game");
   };
 
-  /* ---------------- SHARE CLUE ---------------- */
+  /* =========================
+     SHARE CLUE
+  ========================= */
 
   const shareClue = () => {
     if (clueShared) {
       return;
     }
 
-    setClueShared(true);
+    const clue =
+      CLUES[playerRole];
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        sender: "You",
-        text: PRIVATE_CLUE,
-        own: true,
-      },
-    ]);
+    if (!clue) {
+      return;
+    }
+
+    const success =
+      sendSocketMessage({
+        type:
+          "clue_shared",
+        playerId,
+        name:
+          playerName ||
+          "Player",
+        role:
+          playerRole,
+        clue,
+      });
+
+    if (!success) {
+      alert(
+        "Room connection is not ready."
+      );
+
+      return;
+    }
+
+    /*
+      Set immediately so
+      double-click cannot send
+      the same clue twice.
+    */
+    setClueShared(
+      true
+    );
   };
 
-  /* ---------------- CHAT ---------------- */
+  /* =========================
+     CHAT
+  ========================= */
 
   const sendMessage = () => {
-    const text = chatMessage.trim();
+    const text =
+      chatMessage.trim();
 
     if (!text) {
       return;
     }
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        sender: "You",
+    const success =
+      sendSocketMessage({
+        type:
+          "chat",
+        playerId,
+        name:
+          playerName ||
+          "Player",
         text,
-        own: true,
-      },
-    ]);
+      });
+
+    if (!success) {
+      alert(
+        "Room connection is not ready."
+      );
+
+      return;
+    }
 
     setChatMessage("");
   };
 
-  const handleChatKeyDown = (event) => {
-    if (event.key === "Enter") {
-      sendMessage();
-    }
-  };
+  const handleChatKeyDown =
+    (event) => {
+      if (
+        event.key ===
+        "Enter"
+      ) {
+        sendMessage();
+      }
+    };
 
-  /* ---------------- ANSWER ---------------- */
+  /* =========================
+     ANSWER
+  ========================= */
 
   const submitAnswer = () => {
-    if (!answer.trim()) {
+    const value =
+      answer.trim();
+
+    if (!value) {
       return;
     }
 
-    if (answer.trim() === "30") {
-      setAnswerStatus("correct");
+    const success =
+      sendSocketMessage({
+        type:
+          "answer_submit",
+        answer:
+          value,
+        playerId,
+        name:
+          playerName ||
+          "Player",
+      });
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "System",
-          text: "🎉 Team solved the puzzle!",
-          own: false,
-        },
-      ]);
-    } else {
-      setAnswerStatus("wrong");
+    if (!success) {
+      alert(
+        "Room connection is not ready."
+      );
     }
   };
+
+  /* =========================
+     LEAVE
+  ========================= */
+
+  const leaveRoom = () => {
+    if (socketRef.current) {
+      socketRef.current.close();
+
+      socketRef.current =
+        null;
+    }
+
+    setRoomCode("");
+
+    setRoomName("");
+
+    setPlayers({});
+
+    playersRef.current =
+      {};
+
+    setSharedClues({});
+
+    setMessages([]);
+
+    setGameStartedAt(
+      null
+    );
+
+    setClueShared(
+      false
+    );
+
+    setAnswer("");
+
+    setAnswerStatus("");
+
+    setIsHost(false);
+
+    setPlayerRole(
+      "Puzzle Solver"
+    );
+
+    setConnectionStatus(
+      "disconnected"
+    );
+
+    setScreen("home");
+  };
+
+  /* =========================
+     DISPLAY DATA
+  ========================= */
+
+  const playerList =
+    Object.values(
+      players
+    );
+
+  const sharedClueCount =
+    Object.keys(
+      sharedClues
+    ).length;
+
+  const progress =
+    answerStatus ===
+    "correct"
+      ? 100
+      : Math.min(
+          25 +
+            sharedClueCount *
+              18,
+          90
+        );
+
+  const connectionText = {
+    connected:
+      "CONNECTED",
+
+    connecting:
+      "CONNECTING",
+
+    disconnected:
+      "OFFLINE",
+
+    error:
+      "CONNECTION ERROR",
+  };
+
+  const privateClue =
+    CLUES[playerRole] ||
+    CLUES[
+      "Puzzle Solver"
+    ];
+
+  /* =========================
+     UI
+  ========================= */
 
   return (
     <div className="app">
       <div className="ambient ambient-one"></div>
+
       <div className="ambient ambient-two"></div>
+
       <div className="grid-bg"></div>
 
       {/* ================= NAVBAR ================= */}
@@ -220,7 +1681,9 @@ function App() {
       <header className="navbar">
         <div
           className="brand"
-          onClick={() => setScreen("home")}
+          onClick={
+            leaveRoom
+          }
         >
           <div className="brand-mark">
             <span></span>
@@ -229,18 +1692,33 @@ function App() {
           </div>
 
           <div>
-            <h1>MultiSolver</h1>
-            <p>Think Together. Solve Together.</p>
+            <h1>
+              MultiSolver
+            </h1>
+
+            <p>
+              Think Together.
+              Solve Together.
+            </p>
           </div>
         </div>
 
         <div className="nav-right">
-          <div className="live-badge">
-            <span className="live-dot"></span>
-            MULTIPLAYER
-          </div>
+          {roomCode && (
+            <div className="live-badge">
+              <span className="live-dot"></span>
 
-          <div className="version">v1.0</div>
+              {
+                connectionText[
+                  connectionStatus
+                ]
+              }
+            </div>
+          )}
+
+          <div className="version">
+            v1.0
+          </div>
         </div>
       </header>
 
@@ -250,35 +1728,55 @@ function App() {
         <main className="home">
           <section className="hero">
             <div className="hero-badge">
-              <span>✦</span>
+              <span>
+                ✦
+              </span>
+
               CO-OP PUZZLE EXPERIENCE
             </div>
 
             <h2>
               One Puzzle.
               <br />
-              <span>Many Minds.</span>
+
+              <span>
+                Many Minds.
+              </span>
             </h2>
 
             <p className="hero-text">
-              A multiplayer puzzle game where players receive
-              different pieces of information and must communicate,
-              collaborate and solve the challenge together.
+              A multiplayer puzzle
+              game where every player
+              holds a different piece
+              of information.
+              Communicate, collaborate
+              and solve the challenge
+              together.
             </p>
 
             <div className="hero-actions">
               <button
                 className="primary-btn"
-                onClick={createRoom}
+                onClick={
+                  openCreateRoom
+                }
               >
-                <span>＋</span>
+                <span>
+                  ＋
+                </span>
+
                 Create Room
-                <b>→</b>
+
+                <b>
+                  →
+                </b>
               </button>
 
               <button
                 className="secondary-btn"
-                onClick={() => setScreen("join")}
+                onClick={
+                  openJoinRoom
+                }
               >
                 Join with Code
               </button>
@@ -286,7 +1784,9 @@ function App() {
 
             <div className="hero-note">
               <span className="mini-dot"></span>
-              Teamwork • Communication • Problem Solving
+
+              Teamwork • Communication
+              • Problem Solving
             </div>
           </section>
 
@@ -297,8 +1797,11 @@ function App() {
               </span>
 
               <h3>
-                You can't solve everything
-                <span> alone.</span>
+                You can't solve
+                everything
+                <span>
+                  alone.
+                </span>
               </h3>
             </div>
 
@@ -321,7 +1824,7 @@ function App() {
                 number="03"
                 icon="✦"
                 title="Collaborate"
-                text="The team combines all clues to reach one final answer."
+                text="The team combines every clue to reach one final answer."
               />
             </div>
           </section>
@@ -333,12 +1836,16 @@ function App() {
               </span>
 
               <h3>
-                Every player has a piece of the answer.
+                Every player has a piece
+                of the answer.
               </h3>
             </div>
 
             <div className="challenge-stat">
-              <strong>4</strong>
+              <strong>
+                4
+              </strong>
+
               <span>
                 Players
                 <br />
@@ -347,7 +1854,10 @@ function App() {
             </div>
 
             <div className="challenge-stat">
-              <strong>1</strong>
+              <strong>
+                1
+              </strong>
+
               <span>
                 Shared
                 <br />
@@ -356,7 +1866,10 @@ function App() {
             </div>
 
             <div className="challenge-stat">
-              <strong>∞</strong>
+              <strong>
+                ∞
+              </strong>
+
               <span>
                 Ways to
                 <br />
@@ -367,57 +1880,182 @@ function App() {
         </main>
       )}
 
+      {/* ================= CREATE ================= */}
+
+      {screen === "create" && (
+        <main className="room-page">
+          <button
+            className="back-btn"
+            onClick={() =>
+              setScreen("home")
+            }
+          >
+            ← Back
+          </button>
+
+          <div className="room-card">
+            <div className="card-icon">
+              +
+            </div>
+
+            <span className="section-label">
+              CREATE A TEAM
+            </span>
+
+            <h2>
+              Set up your room
+            </h2>
+
+            <p>
+              Choose your player name
+              and give your team a name.
+            </p>
+
+            <label className="field-label">
+              YOUR NAME
+            </label>
+
+            <input
+              className="name-input"
+              value={
+                playerName
+              }
+              onChange={(event) =>
+                setPlayerName(
+                  event.target.value
+                )
+              }
+              placeholder="e.g. Alex"
+              maxLength={
+                20
+              }
+            />
+
+            <label className="field-label">
+              ROOM NAME
+            </label>
+
+            <input
+              className="name-input"
+              value={
+                createRoomName
+              }
+              onChange={(event) =>
+                setCreateRoomName(
+                  event.target.value
+                )
+              }
+              placeholder="e.g. Brain Squad"
+              maxLength={
+                30
+              }
+            />
+
+            <button
+              className="primary-btn full-btn"
+              onClick={
+                createRoom
+              }
+            >
+              Create Team Room
+
+              <b>
+                →
+              </b>
+            </button>
+          </div>
+        </main>
+      )}
+
       {/* ================= JOIN ================= */}
 
       {screen === "join" && (
         <main className="room-page">
           <button
             className="back-btn"
-            onClick={() => setScreen("home")}
+            onClick={() =>
+              setScreen("home")
+            }
           >
             ← Back
           </button>
 
           <div className="room-card">
-            <div className="card-icon">↗</div>
+            <div className="card-icon">
+              ↗
+            </div>
 
             <span className="section-label">
               JOIN A TEAM
             </span>
 
-            <h2>Enter your room code</h2>
+            <h2>
+              Join the challenge
+            </h2>
 
             <p>
-              Enter the code shared by your teammate to join their
-              puzzle room.
+              Enter your name and the
+              room code shared by your
+              teammate.
             </p>
 
+            <label className="field-label">
+              YOUR NAME
+            </label>
+
             <input
-              value={roomCode}
-              maxLength={6}
-              onChange={(e) =>
-                setRoomCode(
-                  e.target.value
-                    .replace(/[^a-zA-Z0-9]/g, "")
+              className="name-input"
+              value={
+                joinRoomName
+              }
+              onChange={(event) =>
+                setJoinRoomName(
+                  event.target.value
+                )
+              }
+              placeholder="e.g. Sam"
+              maxLength={
+                20
+              }
+            />
+
+            <label className="field-label">
+              ROOM CODE
+            </label>
+
+            <input
+              className="room-input"
+              value={
+                joinRoomCode
+              }
+              onChange={(event) =>
+                setJoinRoomCode(
+                  event.target.value
+                    .replace(
+                      /[^a-zA-Z0-9]/g,
+                      ""
+                    )
                     .toUpperCase()
                 )
               }
               placeholder="ABC123"
-              className="room-input"
+              maxLength={
+                6
+              }
             />
 
             <button
               className="primary-btn full-btn"
-              onClick={joinRoom}
+              onClick={
+                joinRoom
+              }
             >
               Join Room
-              <b>→</b>
-            </button>
 
-            <div className="secure-note">
-              <span>●</span>
-              Shared only with your team
-            </div>
+              <b>
+                →
+              </b>
+            </button>
           </div>
         </main>
       )}
@@ -432,25 +2070,83 @@ function App() {
                 GAME ROOM
               </span>
 
-              <h2>Ready to solve?</h2>
+              <h2>
+                {roomName ||
+                  "Connecting..."}
+              </h2>
 
               <p>
-                Invite teammates and prepare for the challenge.
+                {isHost
+                  ? "You are the host. Share the room code with your teammates."
+                  : "You joined the team. Wait for the host to start the challenge."}
               </p>
+
+              <div className="name-display">
+                Playing as:
+
+                <strong>
+                  {
+                    playerName ||
+                    "Player"
+                  }
+                </strong>
+              </div>
+
+              <div className="name-display">
+                Role:
+
+                <strong>
+                  {
+                    playerRole
+                  }
+                </strong>
+              </div>
             </div>
 
-            <div className="room-code-box">
-              <small>ROOM CODE</small>
+            <div>
+              <div className="room-code-box">
+                <small>
+                  ROOM CODE
+                </small>
 
-              <strong>{createdCode}</strong>
+                <strong>
+                  {
+                    roomCode
+                  }
+                </strong>
 
-              <button
-                onClick={() =>
-                  navigator.clipboard?.writeText(createdCode)
-                }
+                <button
+                  onClick={() =>
+                    navigator.clipboard?.writeText(
+                      roomCode
+                    )
+                  }
+                >
+                  Copy
+                </button>
+              </div>
+
+              <div
+                className={`connection-status ${connectionStatus}`}
               >
-                Copy
-              </button>
+                <span></span>
+
+                {connectionStatus ===
+                  "connected" &&
+                  "Room connected"}
+
+                {connectionStatus ===
+                  "connecting" &&
+                  "Connecting..."}
+
+                {connectionStatus ===
+                  "disconnected" &&
+                  "Disconnected"}
+
+                {connectionStatus ===
+                  "error" &&
+                  "Connection error"}
+              </div>
             </div>
           </div>
 
@@ -462,41 +2158,107 @@ function App() {
                     YOUR TEAM
                   </span>
 
-                  <h3>Players</h3>
+                  <h3>
+                    Players
+                  </h3>
                 </div>
 
                 <span className="player-count">
-                  1 / 4
+                  {
+                    Math.min(
+                      playerList.length,
+                      4
+                    )
+                  }{" "}
+                  / 4
                 </span>
               </div>
 
               <div className="players-grid">
-                {TEAMMATES.map((player, index) => (
-                  <div
-                    className="player-card"
-                    key={index}
-                  >
+                {playerList.map(
+                  (player) => (
                     <div
-                      className={`avatar ${player.color}`}
+                      className="player-card"
+                      key={
+                        player.id
+                      }
                     >
-                      {player.initials}
-                    </div>
+                      <div
+                        className={`avatar ${
+                          player.color ||
+                          "purple"
+                        }`}
+                      >
+                        {
+                          player.initials ||
+                          "P"
+                        }
+                      </div>
 
-                    <div className="player-info">
-                      <strong>{player.name}</strong>
+                      <div className="player-info">
+                        <strong>
+                          {
+                            player.name
+                          }
+                        </strong>
 
-                      <span>{player.role}</span>
-                    </div>
+                        <span>
+                          {
+                            player.role
+                          }
+                        </span>
+                      </div>
 
-                    <div
-                      className={`player-status ${
-                        index === 0 ? "you" : ""
-                      }`}
-                    >
-                      {index === 0 ? "You" : "Open"}
+                      <div
+                        className={`player-status ${
+                          player.host
+                            ? "you"
+                            : ""
+                        }`}
+                      >
+                        {player.host
+                          ? "Host"
+                          : player.id ===
+                            playerId
+                          ? "You"
+                          : "Ready"}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
+
+                {playerList.length <
+                  4 &&
+                  Array.from({
+                    length:
+                      4 -
+                      playerList.length,
+                  }).map(
+                    (_, index) => (
+                      <div
+                        className="player-card waiting-card"
+                        key={`wait-${index}`}
+                      >
+                        <div className="avatar">
+                          ?
+                        </div>
+
+                        <div className="player-info">
+                          <strong>
+                            Waiting...
+                          </strong>
+
+                          <span>
+                            Teammate
+                          </span>
+                        </div>
+
+                        <div className="player-status">
+                          Open
+                        </div>
+                      </div>
+                    )
+                  )}
               </div>
             </section>
 
@@ -509,43 +2271,73 @@ function App() {
                 ◆
               </div>
 
-              <h3>How the challenge works</h3>
+              <h3>
+                How the challenge works
+              </h3>
 
               <p>
-                Each player gets different information.
-                Your team must share clues, connect the
-                information and submit one answer.
+                Every player gets a
+                different clue. Share
+                information, connect the
+                patterns and solve one
+                final answer together.
               </p>
 
               <div className="mission-rules">
                 <div>
-                  <span>01</span>
+                  <span>
+                    01
+                  </span>
+
                   Receive a private clue
                 </div>
 
                 <div>
-                  <span>02</span>
+                  <span>
+                    02
+                  </span>
+
                   Share & discuss
                 </div>
 
                 <div>
-                  <span>03</span>
+                  <span>
+                    03
+                  </span>
+
                   Combine information
                 </div>
 
                 <div>
-                  <span>04</span>
+                  <span>
+                    04
+                  </span>
+
                   Solve together
                 </div>
               </div>
 
-              <button
-                className="primary-btn full-btn"
-                onClick={startGame}
-              >
-                Start Challenge
-                <b>→</b>
-              </button>
+              {isHost ? (
+                <button
+                  className="primary-btn full-btn"
+                  onClick={
+                    startGame
+                  }
+                >
+                  Start Challenge
+
+                  <b>
+                    →
+                  </b>
+                </button>
+              ) : (
+                <div className="host-waiting">
+                  <span className="mini-dot"></span>
+
+                  Waiting for host to
+                  start the challenge...
+                </div>
+              )}
             </aside>
           </div>
         </main>
@@ -555,79 +2347,143 @@ function App() {
 
       {screen === "game" && (
         <main className="game-page">
-          {/* GAME HEADER */}
-
           <div className="game-topbar">
             <div>
               <span className="section-label">
-                MISSION 01 / TEAM CHALLENGE
+                {roomName ||
+                  "MULTISOLVER ROOM"}
               </span>
 
-              <h2>The Hidden Pattern</h2>
+              <h2>
+                The Hidden Pattern
+              </h2>
 
               <p className="game-subtitle">
-                Combine the clues. Find the pattern. Solve as a team.
+                Your clue is private.
+                Your team's puzzle is
+                shared.
               </p>
             </div>
 
             <div className="timer">
-              <span>TIME LEFT</span>
+              <span>
+                TIME LEFT
+              </span>
 
               <strong>
-                {formatTime(timeLeft)}
+                {String(
+                  Math.floor(
+                    timeLeft /
+                      60
+                  )
+                ).padStart(
+                  2,
+                  "0"
+                )}
+                :
+                {String(
+                  timeLeft %
+                    60
+                ).padStart(
+                  2,
+                  "0"
+                )}
               </strong>
             </div>
           </div>
 
-          {/* HOW TO PLAY */}
-
           <section className="how-to-play">
             <div className="how-title">
-              <span className="how-icon">?</span>
+              <span className="how-icon">
+                ?
+              </span>
 
               <div>
-                <strong>HOW TO PLAY</strong>
+                <strong>
+                  HOW TO PLAY
+                </strong>
 
                 <p>
-                  Your clue is private. Share it with your
-                  team, combine everyone's information,
-                  then submit one final answer.
+                  Read your private clue,
+                  share it with your team,
+                  combine everyone's
+                  information and submit
+                  one final answer.
                 </p>
               </div>
             </div>
 
             <div className="how-steps">
-              <div className={clueShared ? "step done" : "step"}>
-                <span>01</span>
+              <div
+                className={
+                  clueShared
+                    ? "step done"
+                    : "step"
+                }
+              >
+                <span>
+                  01
+                </span>
+
                 Share clue
               </div>
 
               <div className="step">
-                <span>02</span>
+                <span>
+                  02
+                </span>
+
                 Discuss
               </div>
 
               <div className="step">
-                <span>03</span>
+                <span>
+                  03
+                </span>
+
                 Combine
               </div>
 
               <div
                 className={
-                  answerStatus === "correct"
+                  answerStatus ===
+                  "correct"
                     ? "step done"
                     : "step"
                 }
               >
-                <span>04</span>
+                <span>
+                  04
+                </span>
+
                 Solve
               </div>
             </div>
           </section>
 
-          <div className="game-layout">
-            {/* LEFT SIDE */}
+          <div
+            className={`game-connection ${connectionStatus}`}
+          >
+            <span></span>
 
+            {connectionStatus ===
+              "connected" &&
+              `Live multiplayer • Room ${roomCode}`}
+
+            {connectionStatus ===
+              "connecting" &&
+              "Connecting to multiplayer room..."}
+
+            {connectionStatus ===
+              "disconnected" &&
+              "Disconnected from room"}
+
+            {connectionStatus ===
+              "error" &&
+              "Unable to connect to room"}
+          </div>
+
+          <div className="game-layout">
             <section className="game-main-column">
               {/* PRIVATE CLUE */}
 
@@ -639,7 +2495,7 @@ function App() {
                     </span>
 
                     <h3>
-                      Information only you receive
+                      Your information
                     </h3>
                   </div>
 
@@ -653,33 +2509,43 @@ function App() {
                     🔐
                   </div>
 
-                  <p>{PRIVATE_CLUE}</p>
+                  <p>
+                    {
+                      privateClue
+                    }
+                  </p>
                 </div>
 
                 <div className="private-clue-action">
                   {clueShared ? (
                     <div className="shared-success">
-                      ✓ Clue shared with your team
+                      ✓ Your clue is now
+                      visible to the team
                     </div>
                   ) : (
                     <button
                       className="primary-btn"
-                      onClick={shareClue}
+                      onClick={
+                        shareClue
+                      }
                     >
                       Share Clue with Team
-                      <b>→</b>
+
+                      <b>
+                        →
+                      </b>
                     </button>
                   )}
                 </div>
               </section>
 
-              {/* TEAM PUZZLE */}
+              {/* PUZZLE */}
 
               <section className="puzzle-panel">
                 <div className="panel-heading">
                   <div>
                     <span className="section-label">
-                      TEAM PUZZLE
+                      SHARED TEAM PUZZLE
                     </span>
 
                     <h3>
@@ -694,27 +2560,44 @@ function App() {
 
                 <div className="puzzle-box">
                   <p>
-                    Your team has different pieces of
-                    information. Use them together to
-                    find the missing number.
+                    Everyone sees the same
+                    puzzle, but each player
+                    has different information
+                    needed to solve it.
                   </p>
 
                   <div className="sequence">
-                    <span>2</span>
+                    <span>
+                      2
+                    </span>
 
-                    <i>→</i>
+                    <i>
+                      →
+                    </i>
 
-                    <span>6</span>
+                    <span>
+                      6
+                    </span>
 
-                    <i>→</i>
+                    <i>
+                      →
+                    </i>
 
-                    <span>12</span>
+                    <span>
+                      12
+                    </span>
 
-                    <i>→</i>
+                    <i>
+                      →
+                    </i>
 
-                    <span>20</span>
+                    <span>
+                      20
+                    </span>
 
-                    <i>→</i>
+                    <i>
+                      →
+                    </i>
 
                     <span className="missing">
                       ?
@@ -722,57 +2605,76 @@ function App() {
                   </div>
 
                   <div className="sequence-hint">
-                    <span>HINT</span>
+                    <span>
+                      TEAM PUZZLE
+                    </span>
+
                     <p>
-                      Think about how each number can
-                      be represented as:
-                      <strong> n × (n + 1)</strong>
+                      Combine the private
+                      clues shared by your
+                      teammates to find the
+                      answer.
                     </p>
                   </div>
                 </div>
 
                 <div className="answer-section">
-                  <label>TEAM ANSWER</label>
+                  <label>
+                    TEAM ANSWER
+                  </label>
 
                   <div className="answer-row">
                     <input
                       type="number"
-                      value={answer}
-                      onChange={(e) =>
-                        setAnswer(e.target.value)
+                      value={
+                        answer
+                      }
+                      onChange={(event) =>
+                        setAnswer(
+                          event.target
+                            .value
+                        )
                       }
                       placeholder="Enter final answer"
                     />
 
                     <button
                       className="primary-btn"
-                      onClick={submitAnswer}
+                      onClick={
+                        submitAnswer
+                      }
                     >
                       Submit
-                      <b>→</b>
+
+                      <b>
+                        →
+                      </b>
                     </button>
                   </div>
 
-                  {answerStatus === "wrong" && (
+                  {answerStatus ===
+                    "wrong" && (
                     <div className="answer-feedback wrong">
-                      ✕ Not quite. Combine the clues again.
+                      ✕ Not correct yet.
+                      Discuss the clues
+                      again.
                     </div>
                   )}
 
-                  {answerStatus === "correct" && (
+                  {answerStatus ===
+                    "correct" && (
                     <div className="answer-feedback correct">
-                      ✓ Correct! Your team solved the puzzle.
+                      ✓ Correct! The team
+                      solved the puzzle.
                     </div>
                   )}
                 </div>
               </section>
             </section>
 
-            {/* RIGHT SIDE */}
+            {/* RIGHT */}
 
             <aside className="team-sidebar">
-              {/* TEAM BOARD */}
-
               <section className="team-board">
                 <div className="panel-heading">
                   <div>
@@ -786,85 +2688,71 @@ function App() {
                   </div>
 
                   <span className="shared-count">
-                    {clueShared ? "2 / 4" : "1 / 4"}
+                    {
+                      sharedClueCount
+                    }{" "}
+                    shared
                   </span>
                 </div>
 
-                <div className="team-clue">
-                  <div className="team-avatar purple">
-                    P2
+                {sharedClueCount ===
+                0 ? (
+                  <div className="empty-board">
+                    No clues shared yet.
+                    <br />
+                    Start by sharing your
+                    private clue.
                   </div>
+                ) : (
+                  Object.entries(
+                    sharedClues
+                  ).map(
+                    ([
+                      id,
+                      clue,
+                    ]) => (
+                      <div
+                        className="team-clue revealed"
+                        key={id}
+                      >
+                        <div className="team-avatar purple">
+                          {
+                            clue.name
+                              .substring(
+                                0,
+                                2
+                              )
+                              .toUpperCase()
+                          }
+                        </div>
 
-                  <div>
-                    <strong>Player 2</strong>
-                    <p>
-                      Difference increases by 2 each time.
-                    </p>
-                  </div>
-                </div>
+                        <div>
+                          <strong>
+                            {
+                              clue.name
+                            }
+                          </strong>
 
-                <div className="team-clue">
-                  <div className="team-avatar purple">
-                    P3
-                  </div>
-
-                  <div>
-                    <strong>Player 3</strong>
-                    <p>
-                      First term starts from 1 × 2.
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  className={
-                    clueShared
-                      ? "team-clue revealed"
-                      : "team-clue waiting"
-                  }
-                >
-                  <div className="team-avatar you">
-                    YOU
-                  </div>
-
-                  <div>
-                    <strong>Your clue</strong>
-
-                    <p>
-                      {clueShared
-                        ? "n × (n + 1)"
-                        : "Waiting for you to share..."}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="team-clue waiting">
-                  <div className="team-avatar">
-                    P4
-                  </div>
-
-                  <div>
-                    <strong>Player 4</strong>
-
-                    <p>
-                      Waiting for clue...
-                    </p>
-                  </div>
-                </div>
+                          <p>
+                            {
+                              clue.clue
+                            }
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  )
+                )}
               </section>
-
-              {/* PROGRESS */}
 
               <section className="progress-panel">
                 <div>
-                  <span>TEAM PROGRESS</span>
+                  <span>
+                    TEAM PROGRESS
+                  </span>
 
                   <strong>
-                    {answerStatus === "correct"
-                      ? "100%"
-                      : clueShared
-                      ? "50%"
-                      : "25%"}
+                    {progress}%
                   </strong>
                 </div>
 
@@ -873,11 +2761,7 @@ function App() {
                     className="progress-fill"
                     style={{
                       width:
-                        answerStatus === "correct"
-                          ? "100%"
-                          : clueShared
-                          ? "50%"
-                          : "25%",
+                        `${progress}%`,
                     }}
                   ></div>
                 </div>
@@ -901,42 +2785,76 @@ function App() {
 
               <span className="online-status">
                 <span></span>
-                3 online
+
+                {connectionStatus ===
+                "connected"
+                  ? "Connected"
+                  : "Connecting"}
               </span>
             </div>
 
             <div className="messages">
-              {messages.map((message, index) => (
-                <div
-                  key={index}
-                  className={
-                    message.own
-                      ? "message yours"
-                      : message.sender === "System"
-                      ? "message system"
-                      : "message"
-                  }
-                >
-                  <strong>
-                    {message.sender}
-                  </strong>
-
-                  <p>{message.text}</p>
+              {messages.length ===
+              0 ? (
+                <div className="empty-chat">
+                  No messages yet.
+                  Share a clue or
+                  start discussing.
                 </div>
-              ))}
+              ) : (
+                messages.map(
+                  (message) => (
+                    <div
+                      key={
+                        message.id
+                      }
+                      className={
+                        message.system
+                          ? "message system"
+                          : message.own
+                          ? "message yours"
+                          : "message"
+                      }
+                    >
+                      <strong>
+                        {
+                          message.sender
+                        }
+                      </strong>
+
+                      <p>
+                        {
+                          message.text
+                        }
+                      </p>
+                    </div>
+                  )
+                )
+              )}
             </div>
 
             <div className="chat-input">
               <input
-                value={chatMessage}
-                onChange={(e) =>
-                  setChatMessage(e.target.value)
+                value={
+                  chatMessage
                 }
-                onKeyDown={handleChatKeyDown}
+                onChange={(event) =>
+                  setChatMessage(
+                    event.target
+                      .value
+                  )
+                }
+                onKeyDown={
+                  handleChatKeyDown
+                }
                 placeholder="Share a clue or idea with your team..."
               />
 
-              <button onClick={sendMessage}>
+              <button
+                onClick={
+                  sendMessage
+                }
+              >
                 Send
               </button>
             </div>
@@ -945,10 +2863,13 @@ function App() {
       )}
 
       <footer>
-        <span>MultiSolver</span>
+        <span>
+          MultiSolver
+        </span>
 
         <p>
-          Built around teamwork, communication and
+          Built around teamwork,
+          communication and
           collaborative problem-solving.
         </p>
       </footer>
@@ -956,7 +2877,9 @@ function App() {
   );
 }
 
-/* ================= FEATURE CARD ================= */
+/* =========================
+   FEATURE CARD
+========================= */
 
 function FeatureCard({
   number,
@@ -976,9 +2899,13 @@ function FeatureCard({
         </span>
       </div>
 
-      <h4>{title}</h4>
+      <h4>
+        {title}
+      </h4>
 
-      <p>{text}</p>
+      <p>
+        {text}
+      </p>
 
       <div className="feature-line"></div>
     </div>
